@@ -119,7 +119,7 @@ namespace PepperDash.Essentials.Devices.Common.Cameras
 			}
 			else
 			{
-				CommunicationMonitor = new GenericCommunicationMonitor(this, Communication, 20000, 120000, 300000, "\x81\x09\x04\x00\xFF");
+				CommunicationMonitor = new GenericCommunicationMonitor(this, Communication, 20000, 120000, 300000, new Action (() => SendPowerQuery()));
 			}
 			DeviceManager.AddDevice(CommunicationMonitor);
 		}
