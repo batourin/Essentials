@@ -16,7 +16,7 @@ using Newtonsoft.Json;
 
 namespace PepperDash.Essentials.Devices.Common.Cameras
 {
-	public class CameraVisca : CameraBase, IHasCameraPtzControl, ICommunicationMonitor, IHasCameraPresets, IHasPowerControlWithFeedback, IBridgeAdvanced, IHasCameraFocusControl, IHasAutoFocusMode, IHasCameraOff
+	public class CameraVisca : CameraBase, IHasCameraPtzControl, ICommunicationMonitor, IHasCameraPresets, IHasPowerControlWithFeedback, IBridgeAdvanced, IHasCameraFocusControl, IHasAutoFocusMode
 	{
         CameraViscaPropertiesConfig PropertiesConfig;
 
