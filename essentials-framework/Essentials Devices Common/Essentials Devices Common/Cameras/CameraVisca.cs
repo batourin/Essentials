@@ -30,11 +30,10 @@ namespace PepperDash.Essentials.Devices.Common.Cameras
         private CrestronQueue<Action<byte[]>> InquiryResponseQueue;
 
         /// <summary>
-        /// Camera ID (Default 1)
+        /// Camera and Response ID generated in constructor from config's camera ID
         /// </summary>
-        public byte ID = 0x01;
-        public byte ResponseID;
-
+        public readonly byte ID = 0x80; // 0b1000_0XXX, where XXX would be added in constructor based on Camera ID
+        public readonly byte ResponseID = 0x80; // 0b1XXX_0000, where XXX would be added in constructor based on Camera ID
 
 		public byte PanSpeedSlow = 0x10;
 		public byte TiltSpeedSlow = 0x10;
@@ -87,8 +86,8 @@ namespace PepperDash.Essentials.Devices.Common.Cameras
 
             PropertiesConfig = props;
 
-            ID = (byte)(props.Id + 0x80);
-            ResponseID = (byte)((props.Id * 0x10) + 0x80);
+            ID |= props.Id; // 0b1000_0XXX, where XXX is camera ID
+            ResponseID |= (byte)(props.Id << 4); // 0b1XXX_0000, where XXX is camera ID
 
             SetupCameraSpeeds();
 
@@ -119,7 +118,7 @@ namespace PepperDash.Essentials.Devices.Common.Cameras
 			}
 			else
 			{
-				CommunicationMonitor = new GenericCommunicationMonitor(this, Communication, 20000, 120000, 300000, "\x81\x09\x04\x00\xFF");
+				CommunicationMonitor = new GenericCommunicationMonitor(this, Communication, 20000, 120000, 300000, new Action(()=>SendPowerQuery()));
 			}
 			DeviceManager.AddDevice(CommunicationMonitor);
 		}
@@ -185,7 +184,6 @@ namespace PepperDash.Essentials.Devices.Common.Cameras
 
 			}
 		}
-	
 
 		void SendBytes(byte[] b)
 		{
@@ -209,29 +207,30 @@ namespace PepperDash.Essentials.Devices.Common.Cameras
                 if (Debug.Level == 2) // This check is here to prevent following string format from building unnecessarily on level 0 or 1
                     Debug.Console(2, this, "Received:{0}", ComTextHelper.GetEscapedText(newBytes));
 
-                byte[] message = new byte[] { };
+                byte[] message = null;
 
                 // Search for the delimiter 0xFF character
                 for (int i = 0; i < newBytes.Length; i++)
                 {
                     if (newBytes[i] == 0xFF)
                     {
-                        // i will be the index of the delmiter character
-                        message = newBytes.Take(i).ToArray();
-                        // Skip over what we just took and save the rest for next time
-                        newBytes = newBytes.Skip(i).ToArray();
+                        // Check that message is for us
+                        if (newBytes[0] == ResponseID)
+                        {
+                            // Skip Address byte, i will be the index of the delmiter character
+                            //message = newBytes.Skip(1).Take(i - 1).ToArray(); // LINQ is slow, replace it with Copy operation
+                            message = new byte[i - 1];
+                            Array.Copy(newBytes, 1, message, 0, i - 1);
+                        }
+                        // Skip over delimmiter and save the rest for next time
+                        newBytes = newBytes.Skip(i+1).ToArray();
                     }
                 }
 
-                if (message.Length > 0)
+                //Check for matching ID
+                if (message != null && message.Length > 0)
                 {
-                    // Check for matching ID
-                    if (message[0] != ResponseID)
-                    {
-                        return;
-                    }
-
-                    switch (message[1])
+                    switch (message[0])
                     {
                         case 0x40:
                             {
@@ -239,10 +238,11 @@ namespace PepperDash.Essentials.Devices.Common.Cameras
                                 Debug.Console(2, this, "ACK Received");
                                 break;
                             }
-                        case 0x50:
+                        case 0x50: // socket 0
+                        case 0x51: // socket 1
                             {
 
-                                if (message[2] == 0xFF)
+                                if (message.Length == 1)
                                 {
                                     // Completion received
                                     Debug.Console(2, this, "Completion Received");
@@ -253,8 +253,8 @@ namespace PepperDash.Essentials.Devices.Common.Cameras
                                     if (InquiryResponseQueue.Count > 0)
                                     {
                                         var inquiryAction = InquiryResponseQueue.Dequeue();
-
-                                        inquiryAction.Invoke(message.Skip(2).ToArray());
+                                        // send VISCA message body only
+                                        inquiryAction.Invoke(message.Skip(1).ToArray());
                                     }
                                     else
                                     {
@@ -264,11 +264,12 @@ namespace PepperDash.Essentials.Devices.Common.Cameras
 
                                 break;
                             }
-                        case 0x60:
+                        case 0x60: // socket 0
+                        case 0x61: // socket 1
                             {
                                 // Error message
 
-                                switch (message[2])
+                                switch (message[1])
                                 {
                                     case 0x01:
                                         {
@@ -310,17 +311,7 @@ namespace PepperDash.Essentials.Devices.Common.Cameras
                                 break;
                             }
                     }
-
-                    if (message == new byte[] { ResponseID, 0x50, 0x02, 0xFF })
-                    {
-                        PowerIsOn = true;
-                    }
-                    else if (message == new byte[] { ResponseID, 0x50, 0x03, 0xFF })
-                    {
-                        PowerIsOn = false;
-                    }
-
-                }
+                } // Message 
 
             }
             catch (Exception err)
@@ -584,12 +575,24 @@ namespace PepperDash.Essentials.Devices.Common.Cameras
             SendAutoFocusQuery();
         }
 
-        #endregion
-
         void SendAutoFocusQuery()
         {
             SendBytes(new byte[] { ID, 0x09, 0x04, 0x38, 0xFF });
             InquiryResponseQueue.Enqueue(HandleAutoFocusResponse);
+        }
+
+        private bool focusIsAuto;
+        public bool FocusIsAuto
+        {
+            get { return focusIsAuto; }
+            set
+            {
+                if (value != focusIsAuto)
+                {
+                    focusIsAuto = value;
+                    // TODO: Feedback?
+                }
+            }
         }
 
         void HandleAutoFocusResponse(byte[] response)
@@ -599,17 +602,19 @@ namespace PepperDash.Essentials.Devices.Common.Cameras
                 case 0x02:
                     {
                         // Auto Mode
-                        PowerIsOn = true;
+                        FocusIsAuto = true;
                         break;
                     }
                 case 0x03:
                     {
                         // Manual Mode
-                        PowerIsOn = false;
+                        FocusIsAuto = false;
                         break;
                     }
             }
         }
+
+        #endregion
 
         #region IHasCameraOff Members
 
@@ -633,10 +638,24 @@ namespace PepperDash.Essentials.Devices.Common.Cameras
 
         public override EssentialsDevice BuildDevice(DeviceConfig dc)
         {
+            IList<string> deserializeErrorMessages = new List<string>();
+
             Debug.Console(1, "Factory Attempting to create new CameraVisca Device");
-            var comm = CommFactory.CreateCommForDevice(dc);
             var props = Newtonsoft.Json.JsonConvert.DeserializeObject<Cameras.CameraViscaPropertiesConfig>(
-                dc.Properties.ToString());
+                dc.Properties.ToString(), new JsonSerializerSettings() {
+                 Error = delegate (object sender, Newtonsoft.Json.Serialization.ErrorEventArgs args)
+                    {
+                        deserializeErrorMessages.Add(args.ErrorContext.Error.Message);
+                        args.ErrorContext.Handled = true;
+                    }
+                });
+            if (deserializeErrorMessages.Count > 0)
+            {
+                Debug.Console(0, "Factory Attempting to create new CameraVisca Device failed on parsing config: {0}", String.Join("\r\n", deserializeErrorMessages.ToArray()));
+                return null;
+            }
+
+            var comm = CommFactory.CreateCommForDevice(dc);
             return new Cameras.CameraVisca(dc.Key, dc.Name, comm, props);
         }
     }
@@ -648,37 +667,51 @@ namespace PepperDash.Essentials.Devices.Common.Cameras
         /// Control ID of the camera (1-7)
         /// </summary>
         [JsonProperty("id")]
-        public uint Id { get; set; }
+        public byte Id
+        {
+            get 
+            {
+                return id;
+            }
+            set
+            {
+                if(value > 0 && value < 8)
+                    id = value;
+                else
+                    throw(new ArgumentOutOfRangeException("Id", "Camera ID should be in range between 1 to 7"));
+            }
+        }
+        private byte id;
 
         /// <summary>
         /// Slow Pan speed (0-18)
         /// </summary>
         [JsonProperty("panSpeedSlow")]
-        public uint PanSpeedSlow { get; set; }
+        public byte PanSpeedSlow { get; set; }
 
         /// <summary>
         /// Fast Pan speed (0-18)
         /// </summary>
         [JsonProperty("panSpeedFast")]
-        public uint PanSpeedFast { get; set; }
+        public byte PanSpeedFast { get; set; }
 
         /// <summary>
         /// Slow tilt speed (0-18)
         /// </summary>
         [JsonProperty("tiltSpeedSlow")] 
-        public uint TiltSpeedSlow { get; set; }
+        public byte TiltSpeedSlow { get; set; }
 
         /// <summary>
         /// Fast tilt speed (0-18)
         /// </summary>
         [JsonProperty("tiltSpeedFast")]
-        public uint TiltSpeedFast { get; set; }
+        public byte TiltSpeedFast { get; set; }
 
         /// <summary>
         /// Time a button must be held before fast speed is engaged (Milliseconds)
         /// </summary>
         [JsonProperty("fastSpeedHoldTimeMs")]
-        public uint FastSpeedHoldTimeMs { get; set; }
+        public byte FastSpeedHoldTimeMs { get; set; }
 
     }
 
