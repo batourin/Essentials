@@ -118,7 +118,12 @@ namespace PepperDash.Essentials.Devices.Common.Cameras
 			}
 			else
 			{
-				CommunicationMonitor = new GenericCommunicationMonitor(this, Communication, 20000, 120000, 300000, new Action(()=>SendPowerQuery()));
+				CommunicationMonitor = new GenericCommunicationMonitor(this, Communication, 20000, 120000, 300000, new Action(()=>
+                    {
+                        SendPowerQuery();
+                        SendAutoFocusQuery();
+                    }
+                ));
 			}
 			DeviceManager.AddDevice(CommunicationMonitor);
 		}
